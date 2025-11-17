@@ -195,11 +195,45 @@ void SSTable::open() {
     }
     ::close(ifd);
 
-    data_fd = ::open(data_path.c_str(), O_RDONLY);
+    // Open data file with O_DIRECT if possible; fall back to regular read if not supported
+    data_fd = ::open(data_path.c_str(), O_RDONLY | O_DIRECT);
+    if (data_fd < 0 && errno == EINVAL) {
+        // File system or OS does not support O_DIRECT; fall back to buffered I/O
+        data_fd = ::open(data_path.c_str(), O_RDONLY);
+    }
     if (data_fd < 0) {
         throw std::runtime_error("open data for read failed");
     }
+
+    // -------- Build the static B-tree-like top-level index --------
+    build_btree_index(fanout_);
 }
+
+void SSTable::build_btree_index(std::size_t fanout) {
+    top_index_.clear();
+    fanout_ = fanout;
+
+    std::size_t n = index.size();
+    if (n == 0 || fanout_ == 0) return;
+
+    // Number of entries per block (leaf)
+    std::size_t block_size = (n + fanout_ - 1) / fanout_; // ceil(n / fanout_)
+
+    std::size_t start = 0;
+    while (start < n) {
+        std::size_t end = std::min(start + block_size, n);
+        const std::string& first_key = index[start].key;
+
+        TopIndexEntry e;
+        e.key   = first_key;
+        e.start = start;
+        e.end   = end;
+        top_index_.push_back(std::move(e));
+
+        start = end;
+    }
+}
+
 
 void SSTable::close() {
     if (data_fd >= 0) {
@@ -233,9 +267,72 @@ bool SSTable::read_record_at(int fd, uint64_t off, std::string& k, std::string& 
 // from the data file using its offset. Returns true if found.
 bool SSTable::get(const std::string& key, std::string& value_out) const {
     if (index.empty() || data_fd < 0) return false;
-    auto it = std::lower_bound(index.begin(), index.end(), key,
-        [](const SSTIndexEntry& e, const std::string& k) { return e.key < k; });
+
+    switch (query_mode_) {
+        case QueryMode::BinarySearch:
+            return get_binary(key, value_out);
+        case QueryMode::BTree:
+            return get_btree(key, value_out);
+        default:
+            // Fallback: just use binary search
+            return get_binary(key, value_out);
+    }
+}
+
+bool SSTable::get_binary(const std::string& key, std::string& value_out) const {
+    auto it = std::lower_bound(
+        index.begin(), index.end(), key,
+        [](const SSTIndexEntry& e, const std::string& k) {
+            return e.key < k;
+        }
+    );
     if (it == index.end() || it->key != key) return false;
+
+    std::string k, v;
+    if (!read_record_at(data_fd, it->offset, k, v)) return false;
+    if (k != key) return false;
+    value_out = std::move(v);
+    return true;
+}
+
+bool SSTable::get_btree(const std::string& key, std::string& value_out) const {
+    if (top_index_.empty()) {
+        // If the B-tree index has not been built, fall back to binary search
+        return get_binary(key, value_out);
+    }
+
+    // Step 1: search the root node (top_index_) to find the block
+    // We want the last block whose key <= target key.
+    auto block_it = std::upper_bound(
+        top_index_.begin(), top_index_.end(), key,
+        [](const std::string& k, const TopIndexEntry& e) {
+            return k < e.key;
+        }
+    );
+
+    if (block_it == top_index_.begin()) {
+        // All block first-keys are > key -> key may still be in the first block
+        block_it = top_index_.begin();
+    } else {
+        // upper_bound returns first block with key > target; step back one block
+        --block_it;
+    }
+
+    std::size_t start = block_it->start;
+    std::size_t end   = block_it->end;
+    if (start >= end || start >= index.size()) {
+        return false;
+    }
+    end = std::min(end, index.size());
+
+    // Step 2: binary search *within* the chosen block (leaf)
+    auto it = std::lower_bound(
+        index.begin() + start, index.begin() + end, key,
+        [](const SSTIndexEntry& e, const std::string& k) {
+            return e.key < k;
+        }
+    );
+    if (it == index.begin() + end || it->key != key) return false;
 
     std::string k, v;
     if (!read_record_at(data_fd, it->offset, k, v)) return false;
