@@ -42,11 +42,6 @@ public:
     //   - Otherwise load from disk, put into the buffer pool (LRU)
     void read_bytes(int fd, uint64_t offset, void* dst, std::size_t len);
 
-    // NOTE:
-    //   Currently the hash table uses a fixed number of buckets.
-    //   Extendible hashing (Bonus 2 in the assignment) is NOT implemented yet.
-    //   If implemented, you can add public APIs here to grow/shrink the directory.
-
 private:
     // One frame = one cached 4KB page
     struct Frame {
