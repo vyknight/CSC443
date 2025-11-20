@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/home/mingzhi/csc443/CSC443/test/build/_deps/googletest-subbuild/cmake_install.cmake"
-	],
-	"Parallel" : false
-}
