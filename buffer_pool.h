@@ -4,6 +4,19 @@
 #include <vector>
 #include <list>
 #include <forward_list>
+#include <cstdio>
+
+// ===================== Debug Macro =========================
+#ifndef BP_DEBUG
+#define BP_DEBUG 1   // turn value from 1 to 0 to turnoff debug output
+#endif
+
+#if BP_DEBUG
+#define BP_LOG(fmt, ...) \
+    do { std::printf("[BP] " fmt "\n", ##__VA_ARGS__); } while (0)
+#else
+#define BP_LOG(fmt, ...)
+#endif
 
 // A 4KB page is uniquely identified by (fd, page_no).
 // - fd: file descriptor
@@ -78,7 +91,12 @@ private:
 
     // splitmix64 — fast non-cryptographic hash function used for hashing PageId.
     static uint64_t splitmix64(uint64_t x);
+
+    // ===== Debug helpers =====
+    void debug_print_lru() const;
+    void debug_print_bucket(std::size_t b) const;
 };
 
 // Global buffer pool instance, shared by all SSTables.
 extern BufferPool g_buffer_pool;
+

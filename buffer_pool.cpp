@@ -5,8 +5,17 @@
 #include <cstring>
 #include <cstdlib>
 #include <new>
+#include <sstream>
+#include <string>
 
 BufferPool g_buffer_pool{};  // Global buffer pool instance: by default 1024 pages and 4096 buckets
+
+// ---- helper to stringify PageId for debug ----
+static std::string page_id_str(const PageId& id) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "(fd=%d,page=%lu)", id.fd, (unsigned long)id.page_no);
+    return std::string(buf);
+}
 
 // ------------ Frame implementation: 4KB-aligned buffer, suitable for O_DIRECT-friendly I/O ------------
 
@@ -55,6 +64,7 @@ BufferPool::BufferPool(std::size_t capacity_pages, std::size_t num_buckets)
       table_(std::max<std::size_t>(num_buckets, 16))   // At least 16 buckets
 {
     if (capacity_ == 0) capacity_ = 1;  // Prevent zero capacity
+    BP_LOG("init capacity=%zu pages, buckets=%zu", capacity_, table_.size());
 }
 
 uint64_t BufferPool::splitmix64(uint64_t x) {
@@ -74,6 +84,34 @@ std::size_t BufferPool::bucket_index(const PageId& id) const {
     return static_cast<std::size_t>(h % table_.size());
 }
 
+// -------- Debug printing helpers --------
+
+void BufferPool::debug_print_lru() const {
+#if BP_DEBUG
+    std::ostringstream oss;
+    oss << "[LRU] [MRU] ";
+    for (auto it = lru_.begin(); it != lru_.end(); ++it) {
+        oss << page_id_str(it->id);
+        auto nxt = it;
+        ++nxt;
+        if (nxt != lru_.end()) oss << " -> ";
+    }
+    oss << " [LRU]";
+    BP_LOG("%s", oss.str().c_str());
+#endif
+}
+
+void BufferPool::debug_print_bucket(std::size_t b) const {
+#if BP_DEBUG
+    std::ostringstream oss;
+    oss << "[Bucket " << b << "] ";
+    for (auto it : table_[b]) {
+        oss << page_id_str(it->id) << " ";
+    }
+    BP_LOG("%s", oss.str().c_str());
+#endif
+}
+
 BufferPool::Frame& BufferPool::get_frame(int fd, uint64_t page_no) {
     PageId id{fd, page_no};
     std::size_t b = bucket_index(id);
@@ -84,7 +122,10 @@ BufferPool::Frame& BufferPool::get_frame(int fd, uint64_t page_no) {
         FrameIterator fit = *it;
         if (fit->id == id) {
             // Cache hit: move the frame to the front of the LRU list (most recently used)
+            BP_LOG("HIT   %s", page_id_str(id).c_str());
             lru_.splice(lru_.begin(), lru_, fit);
+            debug_print_lru();
+            debug_print_bucket(b);
             return *lru_.begin();
         }
     }
@@ -96,6 +137,8 @@ BufferPool::Frame& BufferPool::get_frame(int fd, uint64_t page_no) {
         std::size_t vb = bucket_index(vid);
         Bucket& vbucket = table_[vb];
 
+        BP_LOG("EVICT %s", page_id_str(vid).c_str());
+
         // Remove this iterator from the corresponding bucket's list
         vbucket.remove(victim);
 
@@ -103,6 +146,8 @@ BufferPool::Frame& BufferPool::get_frame(int fd, uint64_t page_no) {
         lru_.erase(victim);
         --size_;
     }
+
+    BP_LOG("MISS  %s -> load from disk", page_id_str(id).c_str());
 
     // 3) Read a new page from disk and insert it into the LRU head and bucket list
     Frame frame;            // Constructor allocates a 4KB aligned buffer
@@ -123,6 +168,9 @@ BufferPool::Frame& BufferPool::get_frame(int fd, uint64_t page_no) {
 
     // Insert into the bucket's linked list (chaining)
     bucket.push_front(new_it);
+
+    debug_print_lru();
+    debug_print_bucket(b);
 
     return *new_it;
 }
@@ -149,3 +197,4 @@ void BufferPool::read_bytes(int fd, uint64_t offset, void* dst, std::size_t len)
         remaining -= can_copy;
     }
 }
+
