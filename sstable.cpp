@@ -101,7 +101,7 @@ SSTable SSTable::build(const std::string& base_no_ext,
     }
     int ifd = ::open(t.index_path.c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0644);
     if (ifd < 0) {
-        ::close(dfd);
+	    ::close(dfd);
         throw std::runtime_error("open index for write failed");
     }
 
@@ -194,18 +194,11 @@ void SSTable::open() {
         index.push_back({std::move(k), off});
     }
     ::close(ifd);
-
-    // Open data file with O_DIRECT if possible; fall back to regular read if not supported
-    data_fd = ::open(data_path.c_str(), O_RDONLY | O_DIRECT);
-    if (data_fd < 0 && errno == EINVAL) {
-        // File system or OS does not support O_DIRECT; fall back to buffered I/O
-        data_fd = ::open(data_path.c_str(), O_RDONLY);
-    }
+    data_fd = ::open(data_path.c_str(), O_RDONLY);
     if (data_fd < 0) {
         throw std::runtime_error("open data for read failed");
     }
 
-    // -------- Build the static B-tree-like top-level index --------
     build_btree_index(fanout_);
 }
 

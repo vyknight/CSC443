@@ -1,3 +1,12 @@
+#pragma once
+
+#include <string>
+#include <vector>
+#include <functional>
+#include <cstdint>
+#include <cstddef>
+#include <utility>
+
 class SSTable {
 public:
     // Which algorithm to use for point queries
