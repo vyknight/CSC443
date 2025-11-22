@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <filesystem>
 #include <map>
-
 namespace fs = std::filesystem;
 
 KVDatabase::KVDatabase(std::string db_dir, int memtable_size)

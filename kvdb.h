@@ -1,6 +1,6 @@
 #pragma once
 
-#include "newsstable.h"
+#include "sstable.h"
 #include "avl_tree.h"
 #include <string>
 #include <vector>
