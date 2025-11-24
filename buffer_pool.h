@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <vector>
 #include <list>
-#include <forward_list>
 #include <cstdio>
 
 // ===================== Debug Macro =========================
@@ -56,11 +55,17 @@ public:
     void read_bytes(int fd, uint64_t offset, void* dst, std::size_t len);
 
 private:
+    struct Frame;                                              // forward declaration
+    using FrameList      = std::list<Frame>;                   // LRU list
+    using FrameIterator  = FrameList::iterator;                // iterator into LRU list
+    using Bucket         = std::list<FrameIterator>;           // hash table chaining
     // One frame = one cached 4KB page
     struct Frame {
         PageId id{};              // (fd, page_no)
         char* data{nullptr};      // 4KB buffer, PAGE_SIZE-aligned
         std::size_t valid{0};     // valid bytes read (<= PAGE_SIZE)
+
+        Bucket::iterator bucket_pos; // maintain O(1) in bucket removal
 
         Frame();
         ~Frame();
@@ -71,10 +76,6 @@ private:
         Frame(Frame&& other) noexcept;
         Frame& operator=(Frame&& other) noexcept;
     };
-
-    using FrameList      = std::list<Frame>;         // LRU list
-    using FrameIterator  = FrameList::iterator;      // iterator into LRU list
-    using Bucket         = std::forward_list<FrameIterator>; // hash table chaining
 
     std::size_t capacity_;        // maximum number of cached pages
     std::size_t size_{0};         // current number of cached pages

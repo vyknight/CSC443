@@ -140,7 +140,7 @@ BufferPool::Frame& BufferPool::get_frame(int fd, uint64_t page_no) {
         BP_LOG("EVICT %s", page_id_str(vid).c_str());
 
         // Remove this iterator from the corresponding bucket's list
-        vbucket.remove(victim);
+        vbucket.erase(victim->bucket_pos);
 
         // Remove the frame from the LRU list
         lru_.erase(victim);
@@ -168,7 +168,7 @@ BufferPool::Frame& BufferPool::get_frame(int fd, uint64_t page_no) {
 
     // Insert into the bucket's linked list (chaining)
     bucket.push_front(new_it);
-
+    new_it->bucket_pos = bucket.begin();
     debug_print_lru();
     debug_print_bucket(b);
 
