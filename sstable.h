@@ -11,47 +11,56 @@ class SSTable {
 public:
     // Which algorithm to use for point queries
     enum class QueryMode {
-        BinarySearch,  // use std::lower_bound over the full index
-        BTree          // use a 2-level static B-tree index (root -> leaf)
+        BinarySearch,  // binary search over leaf pages
+        BTree          // B-tree search from root page down to a leaf
     };
 
 private:
+    // On-disk page layout ------------------------------------------------
+    static constexpr uint32_t PAGE_SIZE = 4096;
+
+    enum class PageType : uint8_t {
+        Header   = 1,
+        Internal = 2,
+        Leaf     = 3,
+    };
+
     std::string data_path;
+    // kept for backward compatibility; not used anymore
     std::string index_path;
     int data_fd = -1;
 
-    struct SSTIndexEntry {
-        std::string key;
-        uint64_t offset;
-    };
-    std::vector<SSTIndexEntry> index;
-
-    // --------- B-tree like top-level index (root node) ---------
-    struct TopIndexEntry {
-        std::string key;   // first key in this block
-        std::size_t start; // inclusive index into `index`
-        std::size_t end;   // exclusive index into `index`
-    };
+    // Global B-tree metadata loaded from header page
+    uint32_t root_page_id_    = 0;  // page id of B-tree root
+    uint32_t leaf_start_page_ = 0;  // first leaf page id
+    uint32_t leaf_page_count_ = 0;  // number of leaf pages
+    uint64_t num_records_     = 0;  // total #records in this SST
 
     QueryMode query_mode_ = QueryMode::BinarySearch;
-    std::vector<TopIndexEntry> top_index_;  // root node
-    std::size_t fanout_ = 128;              // desired number of blocks (can tune)
 
-    // existing private helpers...
-    static void write_u32(int fd, uint32_t v);
-    static void write_u64(int fd, uint64_t v);
-    static uint32_t read_u32_at(int fd, uint64_t off);
-    static uint64_t read_u64_at(int fd, uint64_t off);
-    static bool read_record_at(int fd, uint64_t off,
-                               std::string& k, std::string& v);
+    // ---- low-level helpers (all work in units of pages) ----
+    bool read_page(uint32_t page_id, std::string& out) const;
 
-    // New helpers for B-tree index
-    void build_btree_index(std::size_t fanout);
+    // Leaf helpers
+    bool read_first_key_of_leaf(uint32_t page_id,
+                                std::string& first_key_out) const;
+    bool search_leaf_page(uint32_t page_id,
+                          const std::string& key,
+                          std::string& value_out) const;
+
+    // Internal-node helper: choose child for given key
+    bool find_child_in_internal_page(uint32_t page_id,
+                                     const std::string& key,
+                                     uint32_t& child_page_id_out) const;
+
+    // Query-mode specific implementations
     bool get_binary(const std::string& key, std::string& value_out) const;
-    bool get_btree(const std::string& key, std::string& value_out) const;
+    bool get_btree (const std::string& key, std::string& value_out) const;
 
 public:
     explicit SSTable(std::string base_no_ext);
+
+    // Build a new SST as a static B-tree on disk from sorted key/value pairs.
     static SSTable build(const std::string& base_no_ext,
                          const std::vector<std::pair<std::string,std::string>>& sorted_kv);
 
@@ -59,6 +68,8 @@ public:
     void close();
 
     bool get(const std::string& key, std::string& value_out) const;
+
+    // Range scan [start, end], inclusive, using leaf pages only
     void scan(const std::string& start, const std::string& end,
               const std::function<void(const std::string&, const std::string&)>& visit) const;
 
